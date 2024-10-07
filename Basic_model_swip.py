@@ -35,7 +35,7 @@ def post_process_audio(audio, sample_rate=44100):
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Run ICA
-def run_ica(emg_data, num_components=14):
+def run_ica(emg_data, num_components):
     """
     Apply ICA to 16-channel EMG data and return the independent components.
     
@@ -344,7 +344,7 @@ def train(model, train_loader, criterion, optimizer, num_epochs=10, base_dir='ru
             f.write(f'training loss: {running_loss:.4f}\n')
 
     # Save final model
-    save_model(model, save_path = 'model.pth')
+    save_model(model, model_path)
 
     # Save training losses to a file
     with open(os.path.join(run_dir, 'training_losses.txt'), 'w') as f:
@@ -484,28 +484,29 @@ if __name__ == "__main__":
         test_indices = random_indices[train_size:]
 
         # Create tensors for inputs and labels using the random indices
-        train_inputs_tensor = torch.tensor([all_data[i][0][:in_channel] for i in train_indices], dtype=torch.float32)
-        train_labels_tensor = torch.tensor([all_data[i][1].astype(np.float32) / 32768.0 for i in train_indices], dtype=torch.float32)
+        train_inputs = [torch.tensor(np.array(all_data[i][0][:in_channel]), dtype=torch.float32) for i in train_indices]
+        train_labels = [torch.tensor(np.array(all_data[i][1].astype(np.float32) / 32768.0), dtype=torch.float32) for i in train_indices]
         # Stack the tensors into a single tensor
-        train_inputs_tensor = torch.stack(train_labels_tensor)
-        train_labels_tensor = torch.stack(train_labels_tensor)
+        train_inputs_tensor = torch.stack(train_inputs)
+        train_labels_tensor = torch.stack(train_labels)
         for i in range(len(train_labels_tensor)):
-                train_independent_components , train_ica = run_ica(np.transpose(train_labels_tensor[i]))
-                plot_signals(np.array(train_labels_tensor[i]), np.transpose(train_independent_components))
-                train_labels_tensor[i] = torch.tensor(train_independent_components)
+            train_independent_components , train_ica = run_ica(np.transpose(train_inputs_tensor[i]),in_channel)
+            train_inputs_tensor[i] = torch.tensor(np.transpose(train_independent_components))
+        #plot_signals(np.array(train_inputs_tensor[i]), np.transpose(train_independent_components))
 
         # The remaining 10% can be used for testing
         test_indices = random_indices[train_size:]
 
         # Create tensors for test inputs and labels
-        test_inputs_tensor = torch.tensor([all_data[i][0][:in_channel] for i in test_indices], dtype=torch.float32)
-        test_labels_tensor = torch.tensor([all_data[i][1].astype(np.float32) / 32768.0 for i in test_indices], dtype=torch.float32)
+        test_inputs = [torch.tensor(np.array(all_data[i][0][:in_channel]), dtype=torch.float32) for i in test_indices]
+        test_labels = [torch.tensor(np.array(all_data[i][1].astype(np.float32) / 32768.0), dtype=torch.float32) for i in test_indices]
+
         # Stack the tensors into a single tensor
-        test_inputs_tensor = torch.stack(test_inputs_tensor)
-        test_labels_tensor = torch.stack(test_labels_tensor)
+        test_inputs_tensor = torch.stack(test_inputs)
+        test_labels_tensor = torch.stack(test_labels)
         for i in range(len(test_inputs_tensor)):
-            test_independent_components , test_ica = run_ica(np.transpose(test_inputs_tensor[i]))
-            test_inputs_tensor[i] = torch.tensor(test_independent_components)
+            test_independent_components , test_ica = run_ica(np.transpose(test_inputs_tensor[i]),in_channel)
+            test_inputs_tensor[i] = torch.tensor(np.transpose(test_independent_components))
 
 
         # Process the labels to be spectograms
