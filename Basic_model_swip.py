@@ -389,31 +389,32 @@ def test(model, test_loader, criterion, run_dir):
             # Calculate accuracy (if applicable)
             outputs = model(inputs)
             for j in range(len(inputs)):
-                loss = criterion(outputs[i], labels[i])
-                # Accumulate loss
-                running_loss += loss.item() * inputs.size(0)
+                if j%10 == 0:
+                    loss = criterion(outputs[j], labels[j])
+                    # Accumulate loss
+                    running_loss += loss.item() * inputs.size(0)
+                    
+                    true_spec = labels[j].detach().cpu().numpy()  # Example true spectrogram
+                    linear_spectrogram = librosa.feature.inverse.mel_to_stft(true_spec, sr=44100, n_fft=2048)
+                    reconstructed_waveform = librosa.istft(linear_spectrogram, hop_length=256)
+                    waveform_file_path = os.path.join(run_dir, f'reconstructed_waveform_true_{j}.wav')
+                    #listen_to_waveform(reconstructed_waveform, fs=44100)
+                    save_waveform(reconstructed_waveform, 44100, waveform_file_path)
                 
-                true_spec = labels[i].detach().cpu().numpy()  # Example true spectrogram
-                linear_spectrogram = librosa.feature.inverse.mel_to_stft(true_spec, sr=44100, n_fft=2048)
-                reconstructed_waveform = librosa.istft(linear_spectrogram, hop_length=256)
-                waveform_file_path = os.path.join(run_dir, f'reconstructed_waveform_true_{j}.wav')
-                #listen_to_waveform(reconstructed_waveform, fs=44100)
-                save_waveform(reconstructed_waveform, 44100, waveform_file_path)
-               
-                pred_spec = outputs[i].detach().cpu().numpy()  # Example predicted spectrogram
-                linear_spectrogram = librosa.feature.inverse.mel_to_stft(pred_spec, sr=44100, n_fft=2048)
-                reconstructed_waveform = librosa.istft(linear_spectrogram, hop_length=256)
-                waveform_file_path = os.path.join(run_dir, f'reconstructed_waveform_pred_{j}.wav')
-                save_waveform(reconstructed_waveform, 44100, waveform_file_path)
-                #listen_to_waveform(reconstructed_waveform, fs=44100)
-                
-                save_comparison_spectrograms(
-                    true_spec,
-                    pred_spec,
-                    loss,
-                    os.path.join(run_dir, f'comparison_spectrogram_{j + 1}.png')
-                )
-        
+                    pred_spec = outputs[i].detach().cpu().numpy()  # Example predicted spectrogram
+                    linear_spectrogram = librosa.feature.inverse.mel_to_stft(pred_spec, sr=44100, n_fft=2048)
+                    reconstructed_waveform = librosa.istft(linear_spectrogram, hop_length=256)
+                    waveform_file_path = os.path.join(run_dir, f'reconstructed_waveform_pred_{j}.wav')
+                    save_waveform(reconstructed_waveform, 44100, waveform_file_path)
+                    #listen_to_waveform(reconstructed_waveform, fs=44100)
+                    
+                    save_comparison_spectrograms(
+                        true_spec,
+                        pred_spec,
+                        loss,
+                        os.path.join(run_dir, f'comparison_spectrogram_{j + 1}.png')
+                    )
+            
         # Log the test loss
     if log_file:
         with open(log_file, 'a') as f:
@@ -475,7 +476,7 @@ if __name__ == "__main__":
         random_indices = torch.randperm(data_size)
 
         # Calculate the number of samples to take (90%)
-        train_size = int(data_size * 0.9)
+        train_size = int(data_size * 0.95)
 
         # Select random indices for training data
         train_indices = random_indices[:train_size]
@@ -489,13 +490,10 @@ if __name__ == "__main__":
         # Stack the tensors into a single tensor
         train_inputs_tensor = torch.stack(train_inputs)
         train_labels_tensor = torch.stack(train_labels)
-        for i in range(len(train_labels_tensor)):
-            train_independent_components , train_ica = run_ica(np.transpose(train_inputs_tensor[i]),in_channel)
-            train_inputs_tensor[i] = torch.tensor(np.transpose(train_independent_components))
+        #for i in range(len(train_inputs_tensor)):
+            #train_independent_components , train_ica = run_ica(np.transpose(train_inputs_tensor[i]),in_channel)
+            #train_inputs_tensor[i] = torch.tensor(np.transpose(train_independent_components))
         #plot_signals(np.array(train_inputs_tensor[i]), np.transpose(train_independent_components))
-
-        # The remaining 10% can be used for testing
-        test_indices = random_indices[train_size:]
 
         # Create tensors for test inputs and labels
         test_inputs = [torch.tensor(np.array(all_data[i][0][:in_channel]), dtype=torch.float32) for i in test_indices]
@@ -504,9 +502,9 @@ if __name__ == "__main__":
         # Stack the tensors into a single tensor
         test_inputs_tensor = torch.stack(test_inputs)
         test_labels_tensor = torch.stack(test_labels)
-        for i in range(len(test_inputs_tensor)):
-            test_independent_components , test_ica = run_ica(np.transpose(test_inputs_tensor[i]),in_channel)
-            test_inputs_tensor[i] = torch.tensor(np.transpose(test_independent_components))
+        #for i in range(len(test_inputs_tensor)):
+            #test_independent_components , test_ica = run_ica(np.transpose(test_inputs_tensor[i]),in_channel)
+            #test_inputs_tensor[i] = torch.tensor(np.transpose(test_independent_components))
 
 
         # Process the labels to be spectograms
