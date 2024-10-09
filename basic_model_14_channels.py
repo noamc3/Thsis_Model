@@ -34,7 +34,7 @@ def post_process_audio(audio, sample_rate=44100):
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # Run ICA
-def run_ica(emg_data, num_components=14):
+def run_ica(emg_data, num_components=16):
     """
     Apply ICA to 16-channel EMG data and return the independent components.
     
@@ -102,7 +102,7 @@ def save_model(model, file_path):
 def save_spectrogram(spectrogram, file_path, title):
     """Save the spectrogram as an image."""
     plt.figure(figsize=(12, 6))
-    librosa.display.specshow(spectrogram, x_axis='time', y_axis='mel', sr=22050, cmap='viridis')
+    librosa.display.specshow(spectrogram, x_axis='time', y_axis='mel', sr=44100, cmap='viridis')
     plt.colorbar(format='%+2.0f dB')
     plt.title(title)
     plt.savefig(file_path)
@@ -167,7 +167,7 @@ class LearnablePositionalEncoding(nn.Module):
     
 # Patch Embedding: Embeds the 1D input into a lower-dimensional representation
 class PatchEmbedding(nn.Module):
-    def __init__(self, in_channels=14, patch_size=50, embed_dim=256):
+    def __init__(self, in_channels=16, patch_size=50, embed_dim=256):
         super(PatchEmbedding, self).__init__()
         self.proj = nn.Conv1d(in_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
         self.norm = nn.LayerNorm(embed_dim)
@@ -207,7 +207,7 @@ class TransformerEncoderLayer(nn.Module):
 
 # Full Transformer Model
 class TransformerModel(nn.Module):
-    def __init__(self, in_channels=14, embed_dim=256, num_heads=8, ff_dim=512, num_layers=4, patch_size=50):
+    def __init__(self, in_channels=16, embed_dim=256, num_heads=8, ff_dim=512, num_layers=4, patch_size=50):
         super(TransformerModel, self).__init__()
         self.d_model = embed_dim  # Store d_model as an instance variable
         self.patch_embed = PatchEmbedding(in_channels, patch_size, embed_dim)
@@ -394,18 +394,18 @@ def test(model, test_loader, criterion, run_dir):
             # Calculate accuracy (if applicable)
             outputs = model(inputs)
             for j in range(len(inputs)):
-                loss = criterion(outputs[i], labels[i])
+                loss = criterion(outputs[j], labels[j])
                 # Accumulate loss
                 running_loss += loss.item() * inputs.size(0)
                 
-                true_spec = labels[i].detach().cpu().numpy()  # Example true spectrogram
+                true_spec = labels[j].detach().cpu().numpy()  # Example true spectrogram
                 linear_spectrogram = librosa.feature.inverse.mel_to_stft(true_spec, sr=44100, n_fft=2048)
                 reconstructed_waveform = librosa.istft(linear_spectrogram, hop_length=256)
                 waveform_file_path = os.path.join(run_dir, f'reconstructed_waveform_true_{j}.wav')
                 #listen_to_waveform(reconstructed_waveform, fs=44100)
                 save_waveform(reconstructed_waveform, 44100, waveform_file_path)
                
-                pred_spec = outputs[i].detach().cpu().numpy()  # Example predicted spectrogram
+                pred_spec = outputs[j].detach().cpu().numpy()  # Example predicted spectrogram
                 linear_spectrogram = librosa.feature.inverse.mel_to_stft(pred_spec, sr=44100, n_fft=2048)
                 reconstructed_waveform = librosa.istft(linear_spectrogram, hop_length=256)
                 waveform_file_path = os.path.join(run_dir, f'reconstructed_waveform_pred_{j}.wav')
@@ -432,7 +432,7 @@ def reconstruct_waveform(spectrogram, fs=44100):
 # Example usage
 if __name__ == "__main__":
     # Initialize the model
-    model = TransformerModel(in_channels=14, embed_dim=256, num_heads=8, ff_dim=512, num_layers=4, patch_size=50)
+    model = TransformerModel(in_channels=16, embed_dim=256, num_heads=8, ff_dim=512, num_layers=4, patch_size=50)
     save_path = 'model.pth'
     train_model = True
     base_dir='runs'
@@ -454,27 +454,27 @@ if __name__ == "__main__":
     sequence_length = 4000
     all_data = np.load('input_and_labels.npy',allow_pickle=True)
     try:
-        train_inputs = [torch.tensor(matrix[:14], dtype=torch.float32) for matrix, _ in all_data][0:math.floor(len(all_data)*0.9)][10:18]
+        train_inputs = [torch.tensor(matrix[:16], dtype=torch.float32) for matrix, _ in all_data][0:math.floor(len(all_data)*0.9)][10:18]
         train_labels = [torch.tensor(array.astype(np.float32) / 32768.0, dtype=torch.float32) for _, array in all_data][0:math.floor(len(all_data)*0.9)][10:18]
 
         # Stack the tensors into a single tensor
         train_inputs_tensor = torch.stack(train_inputs)
         train_labels_tensor = torch.stack(train_labels)
-        for i in range(len(train_inputs)):
-            train_independent_components , train_ica = run_ica(np.transpose(train_inputs[i]))
-            plot_signals(np.array(train_inputs[i]), np.transpose(train_independent_components))
-            train_inputs[i] = torch.tensor(train_independent_components)
+        #for i in range(len(train_inputs)):
+            #train_independent_components , train_ica = run_ica(np.transpose(train_inputs[i]))
+            #plot_signals(np.array(train_inputs[i]), np.transpose(train_independent_components))
+            #train_inputs[i] = torch.tensor(train_independent_components)
         
 
         # Assign test tensors
-        test_inputs = [torch.tensor(matrix[:14], dtype=torch.float32) for matrix, _ in all_data]
-        test_labels = [torch.tensor(array.astype(np.float32) / 32768.0, dtype=torch.float32) for _, array in all_data]
+        test_inputs = [torch.tensor(matrix[:16], dtype=torch.float32) for matrix, _ in all_data][10:18]
+        test_labels = [torch.tensor(array.astype(np.float32) / 32768.0, dtype=torch.float32) for _, array in all_data][10:18]
 
         test_inputs_tensor = torch.stack(test_inputs)
         test_labels_tensor = torch.stack(test_labels)
-        for i in range(len(test_inputs)):
-            test_independent_components , test_ica = run_ica(np.transpose(test_inputs[i]))
-            test_inputs[i] = torch.tensor(test_independent_components)
+        #for i in range(len(test_inputs)):
+            #test_independent_components , test_ica = run_ica(np.transpose(test_inputs[i]))
+            #test_inputs[i] = torch.tensor(test_independent_components)
             #listen_to_waveform(test_labels_tensor[i].numpy(), fs=44100) #here we here the voice of the subjects and we ehre it well
     except Exception as e:
         print(f"Conversion error: {e}")
@@ -495,12 +495,12 @@ if __name__ == "__main__":
 
     # Loss and optimizer
     criterion = nn.MSELoss()
-    optimizer = optim.Adam(model.parameters(), lr=0.00001)
+    optimizer = optim.Adam(model.parameters(), lr=0.0001)
 
 
     if train_model:
         # Train the model
-        train(model, train_loader, criterion, optimizer, num_epochs=1000, base_dir='runs')
+        train(model, train_loader, criterion, optimizer, num_epochs=100, base_dir='runs')
     else:
         # Load the model
         model.load_state_dict(torch.load(save_path))
