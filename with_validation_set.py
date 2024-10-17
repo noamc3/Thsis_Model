@@ -424,11 +424,12 @@ def test(model, test_loader, criterion, run_dir):
             inputs = inputs.to(device)
             labels = labels.to(device)
             running_loss = 0.0
-
+           
             mel_to_linear = torchaudio.transforms.InverseMelScale(n_stft = int(n_fft // 2 + 1), sample_rate=sr,n_mels=n_mels, f_min=fmin, f_max=fmax)
+            mel_to_linear = mel_to_linear.to(device)
             linear_spectrogram = mel_to_linear(labels[i].clone().detach())
             magnitude_spectrogram = torch.sqrt(linear_spectrogram + 1e-10)
-            audio_signal = librosa.griffinlim(magnitude_spectrogram.numpy())
+            audio_signal = librosa.griffinlim(magnitude_spectrogram.cpu().detach().numpy())
             
             #listen_to_audio(audio_signal) #works
           
@@ -445,19 +446,19 @@ def test(model, test_loader, criterion, run_dir):
                     loss = criterion(outputs[j], labels[j])
                     running_loss += loss.item() * inputs.size(0)
                     
-                    true_spec = labels[j].numpy()  
+                    true_spec = labels[j].cpu().detach().numpy()  
                     linear_spectrogram = mel_to_linear(labels[j].clone().detach())
                     magnitude_spectrogram = torch.sqrt(linear_spectrogram + 1e-10)
-                    reconstructed_waveform_true = librosa.griffinlim(magnitude_spectrogram.numpy())
+                    reconstructed_waveform_true = librosa.griffinlim(magnitude_spectrogram.cpu().detach().numpy())
                     #listen_to_audio(reconstructed_waveform_true)
                     
                     waveform_file_path = os.path.join(run_dir, f'reconstructed_waveform_true_{j}.wav')
                     save_waveform(reconstructed_waveform_true, 44100, waveform_file_path)
                 
-                    pred_spec = outputs[j].numpy()  # Example predicted spectrogram
+                    pred_spec = outputs[j].cpu().detach().numpy()  # Example predicted spectrogram
                     linear_spectrogram = mel_to_linear(outputs[j].clone().detach())
                     magnitude_spectrogram = torch.sqrt(linear_spectrogram + 1e-10)
-                    reconstructed_waveform_pred = librosa.griffinlim(magnitude_spectrogram.numpy()) #works
+                    reconstructed_waveform_pred = librosa.griffinlim(magnitude_spectrogram.cpu().detach().numpy()) #works
                     preprocessed_waveform = post_process_audio(reconstructed_waveform_pred)
                     #listen_to_audio(preprocessed_waveform)
                     waveform_file_path = os.path.join(run_dir, f'reconstructed_waveform_pred_{j}.wav')
