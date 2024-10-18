@@ -21,6 +21,12 @@ import torchaudio
 import itertools
 import torch.nn.functional as F
 
+def smooth_spectrogram(spectrogram, kernel_size=5, sigma=1.0):
+    """Apply Gaussian smoothing to the spectrogram."""
+    kernel = gaussian_kernel(kernel_size, sigma).to(spectrogram.device)
+    # Apply convolution
+    smoothed = F.conv1d(spectrogram.unsqueeze(1), kernel, padding=kernel_size // 2)
+    return smoothed.squeeze(1)  # Remove the channel dimension
 
 
 def rms_normalize(audio_data):
@@ -229,7 +235,7 @@ class TransformerModel(nn.Module):
         self.patch_embed = PatchEmbedding(in_channels, patch_size, embed_dim)
         
         # Initialize the learnable positional encoding
-        self.positional_encoding = LearnablePositionalEncoding(d_model=embed_dim, max_len=4096)
+        self.positional_encoding = LearnablePositionalEncoding(d_model=embed_dim, max_len=4000)
 
         # Transformer Encoder
         self.transformer = nn.ModuleList([
@@ -237,7 +243,7 @@ class TransformerModel(nn.Module):
         ])
         
         # Linear projection to match spectrogram size
-        self.fc = nn.Linear(embed_dim,128 * 83)  # Adjusted for (256, 256)
+        self.fc = nn.Linear(embed_dim,128 * 83)  # Adjusted for (128, 83)
         self.embed_dim = embed_dim
 
         # Initialize weights
@@ -281,9 +287,12 @@ class TransformerModel(nn.Module):
 def save_comparison_spectrograms(true_spectrogram, pred_spectrogram, loss, file_path):
     """Save true and predicted spectrograms side by side."""
     plt.figure(figsize=(12, 6))
+    std = true_spectrogram.std()
+    mean = true_spectrogram.mean()
 
-    true_spectrogram = librosa.power_to_db(true_spectrogram, ref=np.max)
-    pred_spectrogram = librosa.power_to_db(pred_spectrogram, ref=np.max)
+
+    #true_spectrogram = librosa.power_to_db(true_spectrogram, ref=np.max)
+    #pred_spectrogram = librosa.power_to_db(pred_spectrogram, ref=np.max)
     
     # Compute the min and max values across both spectrograms to set the same color scale
     vmin = min(true_spectrogram.min(), pred_spectrogram.min())
@@ -293,7 +302,7 @@ def save_comparison_spectrograms(true_spectrogram, pred_spectrogram, loss, file_
     plt.subplot(1, 2, 1)
     librosa.display.specshow(true_spectrogram, x_axis='time', y_axis='mel', sr=22050, vmin=vmin, vmax=vmax)
     plt.colorbar(format='%+2.0f dB')
-    plt.title('True Spectrogram')
+    plt.title(f'True Spectrogram, Mean: {mean:.4f}, Std: {std:.4f}')
 
     # Display predicted spectrogram
     plt.subplot(1, 2, 2)
@@ -418,17 +427,13 @@ def test(model, test_loader, criterion, run_dir):
 
             mel_to_linear = torchaudio.transforms.InverseMelScale(n_stft = int(n_fft // 2 + 1), sample_rate=sr,n_mels=n_mels, f_min=fmin, f_max=fmax)
             linear_spectrogram = mel_to_linear(labels[i].clone().detach())
-            magnitude_spectrogram = torch.sqrt(linear_spectrogram + 1e-10)
-            audio_signal = librosa.griffinlim(magnitude_spectrogram.numpy())
-            
-            #listen_to_audio(audio_signal) #works
-          
+                      
             inputs = rms_normalize(inputs)  # Normalize inputs
             
             # Normalize the labels
             labels = rms_normalize(labels)  # Normalize labels
+            
             # Calculate accuracy (if applicable)
-            print(inputs.shape)
             outputs = model(inputs)
             
             for j in range(len(inputs)):
@@ -455,11 +460,16 @@ def test(model, test_loader, criterion, run_dir):
                     save_waveform(reconstructed_waveform_pred, 44100, waveform_file_path)
                     #listen_to_waveform(reconstructed_waveform, fs=44100)
                     
+                    # Assuming 'outputs' is your predicted spectrogram from the model
+                    smoothed_outputs = smooth_spectrogram(outputs, kernel_size=5, sigma=1.0)
+
+                    # Now you can use 'smoothed_outputs' for further processing or visualization
+                    
                     save_comparison_spectrograms(
                         true_spec,
-                        pred_spec,
+                        smoothed_outputs[j].numpy(),
                         loss,
-                        os.path.join(run_dir, f'comparison_spectrogram_{j + 1}.png')
+                        os.path.join(run_dir, f'comparison_spectrogram_{j}.png')
                     )
 
 def reconstruct_waveform(spectrogram, fs=44100):
@@ -512,104 +522,108 @@ if __name__ == "__main__":
 
     train_model = True
     #parameters to sweep
-    in_channels = [14, 16]
-    num_heads = [4,8]
-    num_layers = [4,8]
-    ff_dims = [256, 512]
-    patch_sizes = [50,70,100]
-    num_epochs = [1000,1200,1500]
-    learning_rates = [0.0001,0.00001,0.000001]
-    criterion = [nn.MSELoss(), nn.L1Loss()]
+    in_channels = [16]
+    num_heads = [4]
+    num_layers = [8]
+    ff_dims = [256]
+    patch_sizes = [50]
+    num_epochs = [1000]
+    learning_rates = [0.0001,0.0001]
+    criterion = [nn.MSELoss(),nn.L1Loss()]
+
+    d_model = 256
+    batch_size = 8
+    sequence_length = 4000
+
+    # Load data
+    all_data = np.load('input_and_labels.npy',allow_pickle=True)
+
+    # Get the total number of data points
+    data_size = len(all_data)
+    
+    # Set a random seed for reproducibility
+    SEED = 42  # You can choose any integer
+    torch.manual_seed(SEED)
+    np.random.seed(SEED)
+
+    # Generate random indices
+    random_indices = torch.randperm(data_size)
+
+    # Calculate the number of samples to take (90%)
+    train_size = int(data_size * 0.8)
+    val_size = int(data_size * 0.9)
+    
+    # Select random indices for training data
+    train_indices = random_indices[:train_size]
+
+    val_indices = random_indices[train_size:val_size]
+    # Select random indices for testing data
+    test_indices = random_indices[val_size:]
+
+    # Create tensors for inputs and labels using the random indices
+    train_inputs = [torch.tensor(np.array(all_data[i][0][:16]), dtype=torch.float32) for i in train_indices]
+    train_labels = [torch.tensor(np.array(all_data[i][1].astype(np.float32) / 32768.0), dtype=torch.float32) for i in train_indices]
+
+    # Stack the tensors into a single tensor
+    train_inputs_tensor = torch.stack(train_inputs)
+    train_labels_tensor = torch.stack(train_labels)
+    #for i in range(len(train_inputs_tensor)):
+        #train_independent_components , train_ica = run_ica(np.transpose(train_inputs_tensor[i]),in_channel)
+        #train_inputs_tensor[i] = torch.tensor(np.transpose(train_independent_components))
+    #plot_signals(np.array(train_inputs_tensor[i]), np.transpose(train_independent_components))
+
+    # Create tensors for test inputs and labels
+    test_inputs = [torch.tensor(np.array(all_data[i][0][:16]), dtype=torch.float32) for i in test_indices]
+    test_labels = [torch.tensor(np.array(all_data[i][1].astype(np.float32) / 32768.0), dtype=torch.float32) for i in test_indices]
+
+    # Stack the tensors into a single tensor
+    test_inputs_tensor = torch.stack(test_inputs)
+    test_labels_tensor = torch.stack(test_labels)
+    #for i in range(len(test_inputs_tensor)):
+        #test_independent_components , test_ica = run_ica(np.transpose(test_inputs_tensor[i]),in_channel)
+        #test_inputs_tensor[i] = torch.tensor(np.transpose(test_independent_components))
+
+
+    # Create tensors for test inputs and labels
+    val_inputs = [torch.tensor(np.array(all_data[i][0][:16]), dtype=torch.float32) for i in val_indices]
+    val_labels = [torch.tensor(np.array(all_data[i][1].astype(np.float32) / 32768.0), dtype=torch.float32) for i in val_indices]
+
+    # Stack the tensors into a single tensor
+    val_inputs_tensor = torch.stack(val_inputs)
+    val_labels_tensor = torch.stack(val_labels)
+
+    # Process the labels to be spectograms
+    train_spectrograms = process_labels(train_labels_tensor)
+    train_spectrograms_tensor = torch.tensor(train_spectrograms, dtype=torch.float32)
+    test_spectrograms = process_labels(test_labels_tensor)
+    test_spectrograms_tensor = torch.tensor(test_spectrograms, dtype=torch.float32)
+    val_spectrograms = process_labels(val_labels_tensor)
+    val_spectrograms_tensor = torch.tensor(val_spectrograms, dtype=torch.float32)
+
+    # Create DataLoader
+    train_dataset = TensorDataset(train_inputs_tensor, train_spectrograms_tensor)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+    test_dataset = TensorDataset(test_inputs_tensor, test_spectrograms_tensor)
+    test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=False)
+
+    val_dataset = TensorDataset(val_inputs_tensor, val_spectrograms_tensor)
+    val_loader = DataLoader(val_dataset, batch_size=len(val_dataset), shuffle=False)
 
     for in_channel, patch_size, num_head, num_layer, ff_dim, num_epoch, learning_rate, criterion in itertools.product(in_channels, patch_sizes, num_heads, num_layers, ff_dims, num_epochs, learning_rates, criterion):
 
 
         # Initialize the model
         model = TransformerModel(in_channels=in_channel, embed_dim=256, num_heads=num_head, ff_dim=ff_dim, num_layers=num_layer, patch_size=patch_size)
-        base_dir='swip_runs_1710_val'
+        base_dir='swip_runs_1810_val_comp_melspec'
         run_id = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        run_dir = os.path.join(base_dir, f'run_{run_id}_num_channels{in_channel}_patch_{patch_size}_num_heads_{num_head}_num_layer_{num_layer}_ff_dim_{ff_dim}_num_epoch_{num_epoch}_learning_rate_{learning_rate}_criterion_{criterion}')
+        run_dir = os.path.join(base_dir, f'num_channels{in_channel}_patch_{patch_size}_num_heads_{num_head}_num_layer_{num_layer}_ff_dim_{ff_dim}_num_epoch_{num_epoch}_learning_rate_{learning_rate}_criterion_{criterion}')
         # Define the log file path
         log_file = os.path.join(run_dir, 'loss_log.txt')
         model_path = os.path.join(run_dir, 'model.pth')
         
         # Ensure the run directory existstest_labels_tensor
         os.makedirs(run_dir, exist_ok=True)
-
-        # Load data
-        d_model = 256
-        batch_size = 8
-        sequence_length = 4000
-
-        # Load data
-        all_data = np.load('input_and_labels.npy',allow_pickle=True)
-
-        # Get the total number of data points
-        data_size = len(all_data)
-
-        # Generate random indices
-        random_indices = torch.randperm(data_size)
-
-        # Calculate the number of samples to take (90%)
-        train_size = int(data_size * 0.8)
-        val_size = int(data_size * 0.9)
-        
-        # Select random indices for training data
-        train_indices = random_indices[:train_size]
-
-        val_indices = random_indices[train_size:val_size]
-        # Select random indices for testing data
-        test_indices = random_indices[val_size:]
-
-        # Create tensors for inputs and labels using the random indices
-        train_inputs = [torch.tensor(np.array(all_data[i][0][:in_channel]), dtype=torch.float32) for i in train_indices]
-        train_labels = [torch.tensor(np.array(all_data[i][1].astype(np.float32) / 32768.0), dtype=torch.float32) for i in train_indices]
-        
-        # Stack the tensors into a single tensor
-        train_inputs_tensor = torch.stack(train_inputs)
-        train_labels_tensor = torch.stack(train_labels)
-        #for i in range(len(train_inputs_tensor)):
-            #train_independent_components , train_ica = run_ica(np.transpose(train_inputs_tensor[i]),in_channel)
-            #train_inputs_tensor[i] = torch.tensor(np.transpose(train_independent_components))
-        #plot_signals(np.array(train_inputs_tensor[i]), np.transpose(train_independent_components))
-
-
-        # Create tensors for test inputs and labels
-        test_inputs = [torch.tensor(np.array(all_data[i][0][:in_channel]), dtype=torch.float32) for i in test_indices]
-        test_labels = [torch.tensor(np.array(all_data[i][1].astype(np.float32) / 32768.0), dtype=torch.float32) for i in test_indices]
-
-        # Stack the tensors into a single tensor
-        test_inputs_tensor = torch.stack(test_inputs)
-        test_labels_tensor = torch.stack(test_labels)
-        #for i in range(len(test_inputs_tensor)):
-            #test_independent_components , test_ica = run_ica(np.transpose(test_inputs_tensor[i]),in_channel)
-            #test_inputs_tensor[i] = torch.tensor(np.transpose(test_independent_components))
-
-         # Create tensors for test inputs and labels
-        val_inputs = [torch.tensor(np.array(all_data[i][0][:in_channel]), dtype=torch.float32) for i in val_indices]
-        val_labels = [torch.tensor(np.array(all_data[i][1].astype(np.float32) / 32768.0), dtype=torch.float32) for i in val_indices]
-
-        # Stack the tensors into a single tensor
-        val_inputs_tensor = torch.stack(test_inputs)
-        val_labels_tensor = torch.stack(test_labels)
-
-        # Process the labels to be spectograms
-        train_spectrograms = process_labels(train_labels_tensor)
-        train_spectrograms_tensor = torch.tensor(train_spectrograms, dtype=torch.float32)
-        test_spectrograms = process_labels(test_labels_tensor)
-        test_spectrograms_tensor = torch.tensor(test_spectrograms, dtype=torch.float32)
-        val_spectrograms = process_labels(test_labels_tensor)
-        val_spectrograms_tensor = torch.tensor(test_spectrograms, dtype=torch.float32)
-
-        # Create DataLoader
-        train_dataset = TensorDataset(train_inputs_tensor, train_spectrograms_tensor)
-        train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
-
-        test_dataset = TensorDataset(test_inputs_tensor, test_spectrograms_tensor)
-        test_loader = DataLoader(test_dataset, batch_size=len(test_dataset), shuffle=True)
-
-        val_dataset = TensorDataset(val_inputs_tensor, val_spectrograms_tensor)
-        val_loader = DataLoader(val_dataset, batch_size=len(val_dataset), shuffle=True)
 
         # Loss and optimizer
         criterion = criterion
